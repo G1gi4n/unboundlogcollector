@@ -1,0 +1,121 @@
+import os
+import unittest
+from datetime import datetime, timezone
+from unittest import mock
+
+import unboundlogcollector as collector
+
+
+class ParseLogLineTests(unittest.TestCase):
+    def test_parse_response_line(self):
+        line = "[1710000000] unbound[123:0] info: 192.168.1.20 example.com A IN NOERROR 0.123"
+
+        entry = collector.parse_log_line(line)
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.client_ip, "192.168.1.20")
+        self.assertEqual(entry.domain, "example.com")
+        self.assertEqual(entry.qtype, "A")
+        self.assertEqual(entry.qclass, "IN")
+        self.assertEqual(entry.rcode, "NOERROR")
+        self.assertEqual(entry.latency_ms, 123.0)
+        self.assertEqual(
+            entry.timestamp,
+            datetime.fromtimestamp(1710000000, tz=timezone.utc),
+        )
+
+    def test_parse_query_line_without_response_fields(self):
+        line = "[1710000000] unbound[123:0] info: 192.168.1.20 example.net AAAA IN"
+
+        entry = collector.parse_log_line(line)
+
+        self.assertIsNotNone(entry)
+        self.assertIsNone(entry.rcode)
+        self.assertIsNone(entry.latency_ms)
+
+    def test_parse_ipv6_client(self):
+        line = "[1710000000] unbound[123:0] info: 2001:db8::1 example.org PTR IN NXDOMAIN 0.050"
+
+        entry = collector.parse_log_line(line)
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.client_ip, "2001:db8::1")
+
+    def test_unmatched_line_returns_none(self):
+        self.assertIsNone(collector.parse_log_line("not an unbound log line"))
+
+
+class ConfigTests(unittest.TestCase):
+    @mock.patch.dict(
+        os.environ,
+        {
+            "UNBOUND_LOG_FILE": "/tmp/unbound.log",
+            "UNBOUND_DB_HOST": "db",
+            "UNBOUND_DB_PORT": "3307",
+            "UNBOUND_DB_USER": "dnsuser",
+            "UNBOUND_DB_PASSWORD": "secret",
+            "UNBOUND_DB_NAME": "dnslogs",
+            "UNBOUND_POLL_INTERVAL": "0.5",
+            "UNBOUND_START_FROM_END": "false",
+        },
+        clear=True,
+    )
+    def test_load_config_from_env(self):
+        config = collector.load_config_from_env()
+
+        self.assertEqual(str(config.log_file), "/tmp/unbound.log")
+        self.assertEqual(config.db_host, "db")
+        self.assertEqual(config.db_port, 3307)
+        self.assertEqual(config.db_user, "dnsuser")
+        self.assertEqual(config.db_password, "secret")
+        self.assertEqual(config.db_name, "dnslogs")
+        self.assertEqual(config.poll_interval, 0.5)
+        self.assertFalse(config.start_from_end)
+
+
+class PersistenceTests(unittest.TestCase):
+    def test_insert_log_marks_query_without_rcode(self):
+        cursor = mock.Mock()
+        entry = collector.ParsedLogEntry(
+            client_ip="192.168.1.20",
+            domain="example.com",
+            qtype="A",
+            qclass="IN",
+            rcode=None,
+            latency_ms=None,
+            timestamp=datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
+        )
+
+        collector.insert_log(cursor, entry)
+
+        execute_args = cursor.execute.call_args.args
+        params = execute_args[1]
+        self.assertEqual(params[0], "192.168.1.20")
+        self.assertEqual(params[1], "example.com")
+        self.assertEqual(params[2], "A")
+        self.assertIsNone(params[3])
+        self.assertIsNone(params[4])
+        self.assertEqual(params[5], "query")
+        self.assertEqual(params[6], datetime(2024, 3, 9, 16, 0))
+
+    def test_process_entry_commits_on_success(self):
+        db = mock.Mock()
+        cursor = mock.Mock()
+        entry = collector.ParsedLogEntry(
+            client_ip="192.168.1.20",
+            domain="example.com",
+            qtype="A",
+            qclass="IN",
+            rcode="NOERROR",
+            latency_ms=12.0,
+            timestamp=datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
+        )
+
+        collector.process_entry(db, cursor, entry)
+
+        self.assertEqual(cursor.execute.call_count, 2)
+        db.commit.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()
