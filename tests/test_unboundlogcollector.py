@@ -59,6 +59,7 @@ class ConfigTests(unittest.TestCase):
             "UNBOUND_DB_NAME": "dnslogs",
             "UNBOUND_POLL_INTERVAL": "0.5",
             "UNBOUND_START_FROM_END": "false",
+            "UNBOUND_VERBOSITY": "2",
         },
         clear=True,
     )
@@ -73,6 +74,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.db_name, "dnslogs")
         self.assertEqual(config.poll_interval, 0.5)
         self.assertFalse(config.start_from_end)
+        self.assertEqual(config.verbosity, 2)
 
 
 class PersistenceTests(unittest.TestCase):
@@ -135,6 +137,51 @@ class DaemonBehaviorTests(unittest.TestCase):
             )
 
         self.assertEqual(lines, [])
+
+    def test_log_processed_line_at_verbosity_two(self):
+        config = collector.CollectorConfig(
+            log_file=collector.Path("/tmp/unbound.log"),
+            db_host="localhost",
+            db_user="admin",
+            db_password="secret",
+            db_name="dns",
+            db_port=3306,
+            poll_interval=0.2,
+            start_from_end=True,
+            verbosity=2,
+        )
+
+        with mock.patch.object(collector.LOGGER, "info") as mock_info:
+            collector.log_processed_line(
+                config,
+                "[1710000000] unbound[123:0] info: 192.168.1.20 example.com A IN\n",
+            )
+
+        mock_info.assert_called_once_with(
+            "Processed log line: %s",
+            "[1710000000] unbound[123:0] info: 192.168.1.20 example.com A IN",
+        )
+
+    def test_log_processed_line_is_silent_below_verbosity_two(self):
+        config = collector.CollectorConfig(
+            log_file=collector.Path("/tmp/unbound.log"),
+            db_host="localhost",
+            db_user="admin",
+            db_password="secret",
+            db_name="dns",
+            db_port=3306,
+            poll_interval=0.2,
+            start_from_end=True,
+            verbosity=1,
+        )
+
+        with mock.patch.object(collector.LOGGER, "info") as mock_info:
+            collector.log_processed_line(
+                config,
+                "[1710000000] unbound[123:0] info: 192.168.1.20 example.com A IN\n",
+            )
+
+        mock_info.assert_not_called()
 
 
 if __name__ == "__main__":

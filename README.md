@@ -37,6 +37,7 @@ export UNBOUND_DB_PASSWORD=change-me
 export UNBOUND_DB_NAME=dns
 export UNBOUND_POLL_INTERVAL=0.2
 export UNBOUND_START_FROM_END=true
+export UNBOUND_VERBOSITY=1
 export UNBOUND_LOG_LEVEL=INFO
 ```
 
@@ -44,6 +45,7 @@ Notes:
 
 - `UNBOUND_START_FROM_END=true` matches the original behavior and skips existing lines already in the log at startup.
 - Set `UNBOUND_START_FROM_END=false` if you want to ingest from the beginning of the current file.
+- `UNBOUND_VERBOSITY=2` logs each successfully processed raw Unbound log line.
 - Timestamps are stored in UTC.
 
 ## Database schema

@@ -38,6 +38,7 @@ class CollectorConfig:
     db_port: int
     poll_interval: float
     start_from_end: bool
+    verbosity: int
 
     def db_connect_kwargs(self) -> dict:
         return {
@@ -78,6 +79,7 @@ def load_config_from_env() -> CollectorConfig:
         db_port=int(os.getenv("UNBOUND_DB_PORT", "3306")),
         poll_interval=float(os.getenv("UNBOUND_POLL_INTERVAL", "0.2")),
         start_from_end=env_flag("UNBOUND_START_FROM_END", True),
+        verbosity=max(0, int(os.getenv("UNBOUND_VERBOSITY", "1"))),
     )
 
 
@@ -199,6 +201,11 @@ def process_entry(db, cursor, entry: ParsedLogEntry) -> None:
     db.commit()
 
 
+def log_processed_line(config: CollectorConfig, line: str) -> None:
+    if config.verbosity >= 2:
+        LOGGER.info("Processed log line: %s", line.rstrip("\r\n"))
+
+
 def run_collector(config: CollectorConfig, stop_event: Event) -> None:
     db = connect_to_database(config)
     cursor = db.cursor()
@@ -216,6 +223,7 @@ def run_collector(config: CollectorConfig, stop_event: Event) -> None:
 
             try:
                 process_entry(db, cursor, entry)
+                log_processed_line(config, line)
             except Exception:
                 try:
                     db.rollback()
