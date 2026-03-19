@@ -1,10 +1,11 @@
 import logging
 import os
 import re
-import time
+import signal
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event
 from typing import Optional
 
 try:
@@ -166,11 +167,16 @@ def open_log_file(path: Path, start_from_end: bool):
     return handle
 
 
-def follow_log(path: Path, poll_interval: float, start_from_end: bool = True):
+def follow_log(
+    path: Path,
+    poll_interval: float,
+    stop_event: Event,
+    start_from_end: bool = True,
+):
     handle = open_log_file(path, start_from_end=start_from_end)
 
     try:
-        while True:
+        while not stop_event.is_set():
             line = handle.readline()
             if line:
                 yield line
@@ -182,7 +188,7 @@ def follow_log(path: Path, poll_interval: float, start_from_end: bool = True):
                 LOGGER.info("Reopened rotated log file: %s", path)
                 continue
 
-            time.sleep(poll_interval)
+            stop_event.wait(poll_interval)
     finally:
         handle.close()
 
@@ -193,7 +199,7 @@ def process_entry(db, cursor, entry: ParsedLogEntry) -> None:
     db.commit()
 
 
-def run_collector(config: CollectorConfig) -> None:
+def run_collector(config: CollectorConfig, stop_event: Event) -> None:
     db = connect_to_database(config)
     cursor = db.cursor()
 
@@ -201,6 +207,7 @@ def run_collector(config: CollectorConfig) -> None:
         for line in follow_log(
             config.log_file,
             poll_interval=config.poll_interval,
+            stop_event=stop_event,
             start_from_end=config.start_from_end,
         ):
             entry = parse_log_line(line)
@@ -231,9 +238,22 @@ def configure_logging() -> None:
     )
 
 
+def install_signal_handlers(stop_event: Event) -> None:
+    def _handle_signal(signum, _frame):
+        signal_name = signal.Signals(signum).name
+        if not stop_event.is_set():
+            LOGGER.info("Received %s, shutting down.", signal_name)
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+
 def main() -> int:
     configure_logging()
     config = load_config_from_env()
+    stop_event = Event()
+    install_signal_handlers(stop_event)
 
     try:
         LOGGER.info(
@@ -244,17 +264,15 @@ def main() -> int:
             config.db_port,
             config.db_name,
         )
-        run_collector(config)
+        run_collector(config, stop_event)
     except FileNotFoundError:
         LOGGER.error("Unbound log file not found: %s", config.log_file)
         return 1
-    except KeyboardInterrupt:
-        LOGGER.info("Collector stopped by user.")
-        return 0
     except Exception:
         LOGGER.exception("Collector exited with an unrecoverable error.")
         return 1
 
+    LOGGER.info("Collector stopped.")
     return 0
 
 

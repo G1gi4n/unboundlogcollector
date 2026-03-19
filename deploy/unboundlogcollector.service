@@ -1,0 +1,19 @@
+[Unit]
+Description=Unbound Log Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=unbound
+Group=unbound
+WorkingDirectory=/opt/unboundlogcollector
+EnvironmentFile=/etc/unboundlogcollector/unboundlogcollector.env
+ExecStart=/opt/unboundlogcollector/.venv/bin/python /opt/unboundlogcollector/unboundlogcollector.py
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

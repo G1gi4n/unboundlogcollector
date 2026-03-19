@@ -60,6 +60,72 @@ mysql -u root -p dns < schema.sql
 python3 unboundlogcollector.py
 ```
 
+## Running as a daemon
+
+Use a service manager instead of trying to double-fork the Python process. On a modern Linux host, `systemd` is the correct daemon wrapper.
+
+Files included in this repo:
+
+- Service unit: [deploy/unboundlogcollector.service](/Users/giancarloguiao/Desktop/devs/UnboundLogCollector/deploy/unboundlogcollector.service)
+- Environment file template: [deploy/unboundlogcollector.env.example](/Users/giancarloguiao/Desktop/devs/UnboundLogCollector/deploy/unboundlogcollector.env.example)
+
+Suggested setup:
+
+1. Install the project under `/opt/unboundlogcollector` and create a virtualenv:
+
+   ```bash
+   sudo mkdir -p /opt/unboundlogcollector
+   sudo cp -R . /opt/unboundlogcollector
+   cd /opt/unboundlogcollector
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   ```
+
+2. Create the runtime configuration file:
+
+   ```bash
+   sudo mkdir -p /etc/unboundlogcollector
+   sudo cp deploy/unboundlogcollector.env.example /etc/unboundlogcollector/unboundlogcollector.env
+   sudo chmod 640 /etc/unboundlogcollector/unboundlogcollector.env
+   ```
+
+3. Edit `/etc/unboundlogcollector/unboundlogcollector.env` and set the real database credentials and log path.
+
+4. Make sure the service account can read the Unbound log and reach MySQL. The sample unit uses `User=unbound` and `Group=unbound`; change that in the unit if your host uses a different account.
+
+5. Install the service unit:
+
+   ```bash
+   sudo cp deploy/unboundlogcollector.service /etc/systemd/system/unboundlogcollector.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now unboundlogcollector
+   ```
+
+6. Check service health and logs:
+
+   ```bash
+   sudo systemctl status unboundlogcollector
+   sudo journalctl -u unboundlogcollector -f
+   ```
+
+The collector now handles `SIGTERM` cleanly, which is what `systemd` sends on stop or restart.
+
+## Are environment variables safe for daemon settings?
+
+Yes for non-secret settings, and acceptable for secrets if you keep them in a root-managed environment file with tight permissions.
+
+Recommended:
+
+- Put daemon settings in `/etc/unboundlogcollector/unboundlogcollector.env`.
+- Keep the file owned by `root` and mode `0640` or stricter.
+- Avoid exporting secrets directly in shell history or inline `systemctl set-environment` commands.
+
+Important caveat:
+
+- Environment variables are not the strongest secret storage. A privileged user can still inspect a running process environment.
+- For typical self-managed Linux deployments, a root-owned `EnvironmentFile=` is usually fine.
+- If you need stronger isolation, use a dedicated secret store or a separate root-readable credentials file and load it at runtime.
+
 ## Testing
 
 The repo uses the standard library `unittest` test suite.

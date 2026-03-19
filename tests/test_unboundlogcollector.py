@@ -1,6 +1,8 @@
 import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
+from threading import Event
 from unittest import mock
 
 import unboundlogcollector as collector
@@ -115,6 +117,24 @@ class PersistenceTests(unittest.TestCase):
 
         self.assertEqual(cursor.execute.call_count, 2)
         db.commit.assert_called_once()
+
+
+class DaemonBehaviorTests(unittest.TestCase):
+    def test_follow_log_stops_when_stop_event_is_set(self):
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as handle:
+            stop_event = Event()
+            stop_event.set()
+
+            lines = list(
+                collector.follow_log(
+                    collector.Path(handle.name),
+                    poll_interval=0.01,
+                    stop_event=stop_event,
+                    start_from_end=False,
+                )
+            )
+
+        self.assertEqual(lines, [])
 
 
 if __name__ == "__main__":
