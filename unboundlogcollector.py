@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     import MySQLdb
@@ -36,6 +37,7 @@ class CollectorConfig:
     db_password: str
     db_name: str
     db_port: int
+    db_timezone: str
     poll_interval: float
     start_from_end: bool
     verbosity: int
@@ -77,6 +79,7 @@ def load_config_from_env() -> CollectorConfig:
         db_password=os.getenv("UNBOUND_DB_PASSWORD", ""),
         db_name=os.getenv("UNBOUND_DB_NAME", "dns"),
         db_port=int(os.getenv("UNBOUND_DB_PORT", "3306")),
+        db_timezone=os.getenv("UNBOUND_DB_TIMEZONE", "system"),
         poll_interval=float(os.getenv("UNBOUND_POLL_INTERVAL", "0.2")),
         start_from_end=env_flag("UNBOUND_START_FROM_END", True),
         verbosity=max(0, int(os.getenv("UNBOUND_VERBOSITY", "1"))),
@@ -102,9 +105,31 @@ def parse_log_line(line: str) -> Optional[ParsedLogEntry]:
     )
 
 
-def insert_log(cursor, entry: ParsedLogEntry) -> None:
+def resolve_database_timezone(name: str):
+    normalized_name = name.strip()
+    lowered_name = normalized_name.lower()
+
+    if lowered_name == "system":
+        return datetime.now().astimezone().tzinfo or timezone.utc
+    if lowered_name == "utc":
+        return timezone.utc
+
+    try:
+        return ZoneInfo(normalized_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(
+            f"Invalid UNBOUND_DB_TIMEZONE value: {name!r}. Use 'system', 'utc', or an IANA timezone name."
+        ) from exc
+
+
+def to_database_timestamp(timestamp: datetime, db_timezone_name: str) -> datetime:
+    db_timezone = resolve_database_timezone(db_timezone_name)
+    return timestamp.astimezone(db_timezone).replace(tzinfo=None)
+
+
+def insert_log(cursor, entry: ParsedLogEntry, db_timezone_name: str) -> None:
     status = "response" if entry.rcode else "query"
-    db_timestamp = entry.timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+    db_timestamp = to_database_timestamp(entry.timestamp, db_timezone_name)
     cursor.execute(
         """
         INSERT INTO dns_logs (client_ip, domain, qtype, rcode, latency_ms, status, timestamp)
@@ -195,9 +220,9 @@ def follow_log(
         handle.close()
 
 
-def process_entry(db, cursor, entry: ParsedLogEntry) -> None:
+def process_entry(db, cursor, entry: ParsedLogEntry, config: CollectorConfig) -> None:
     insert_client_ip(cursor, entry.client_ip)
-    insert_log(cursor, entry)
+    insert_log(cursor, entry, config.db_timezone)
     db.commit()
 
 
@@ -222,7 +247,7 @@ def run_collector(config: CollectorConfig, stop_event: Event) -> None:
                 continue
 
             try:
-                process_entry(db, cursor, entry)
+                process_entry(db, cursor, entry, config)
                 log_processed_line(config, line)
             except Exception:
                 try:
@@ -265,12 +290,13 @@ def main() -> int:
 
     try:
         LOGGER.info(
-            "Starting collector for %s (db=%s@%s:%s/%s)",
+            "Starting collector for %s (db=%s@%s:%s/%s, db_timezone=%s)",
             config.log_file,
             config.db_user,
             config.db_host,
             config.db_port,
             config.db_name,
+            config.db_timezone,
         )
         run_collector(config, stop_event)
     except FileNotFoundError:

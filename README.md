@@ -35,6 +35,7 @@ export UNBOUND_DB_PORT=3306
 export UNBOUND_DB_USER=admin
 export UNBOUND_DB_PASSWORD=change-me
 export UNBOUND_DB_NAME=dns
+export UNBOUND_DB_TIMEZONE=system
 export UNBOUND_POLL_INTERVAL=0.2
 export UNBOUND_START_FROM_END=true
 export UNBOUND_VERBOSITY=1
@@ -45,8 +46,9 @@ Notes:
 
 - `UNBOUND_START_FROM_END=true` matches the original behavior and skips existing lines already in the log at startup.
 - Set `UNBOUND_START_FROM_END=false` if you want to ingest from the beginning of the current file.
+- `UNBOUND_DB_TIMEZONE=system` stores MySQL `DATETIME` values in the server's local system timezone. Use `utc` for UTC, or an IANA timezone like `Asia/Manila`.
 - `UNBOUND_VERBOSITY=2` logs each successfully processed raw Unbound log line.
-- Timestamps are stored in UTC.
+- With the default `UNBOUND_DB_TIMEZONE=system`, timestamps are stored in local system time rather than forced UTC.
 
 ## Database schema
 

@@ -57,6 +57,7 @@ class ConfigTests(unittest.TestCase):
             "UNBOUND_DB_USER": "dnsuser",
             "UNBOUND_DB_PASSWORD": "secret",
             "UNBOUND_DB_NAME": "dnslogs",
+            "UNBOUND_DB_TIMEZONE": "Asia/Manila",
             "UNBOUND_POLL_INTERVAL": "0.5",
             "UNBOUND_START_FROM_END": "false",
             "UNBOUND_VERBOSITY": "2",
@@ -72,12 +73,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.db_user, "dnsuser")
         self.assertEqual(config.db_password, "secret")
         self.assertEqual(config.db_name, "dnslogs")
+        self.assertEqual(config.db_timezone, "Asia/Manila")
         self.assertEqual(config.poll_interval, 0.5)
         self.assertFalse(config.start_from_end)
         self.assertEqual(config.verbosity, 2)
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_to_database_timestamp_uses_named_timezone(self):
+        db_timestamp = collector.to_database_timestamp(
+            datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
+            "Asia/Manila",
+        )
+
+        self.assertEqual(db_timestamp, datetime(2024, 3, 10, 0, 0))
+
     def test_insert_log_marks_query_without_rcode(self):
         cursor = mock.Mock()
         entry = collector.ParsedLogEntry(
@@ -90,7 +100,7 @@ class PersistenceTests(unittest.TestCase):
             timestamp=datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
         )
 
-        collector.insert_log(cursor, entry)
+        collector.insert_log(cursor, entry, "Asia/Manila")
 
         execute_args = cursor.execute.call_args.args
         params = execute_args[1]
@@ -100,11 +110,23 @@ class PersistenceTests(unittest.TestCase):
         self.assertIsNone(params[3])
         self.assertIsNone(params[4])
         self.assertEqual(params[5], "query")
-        self.assertEqual(params[6], datetime(2024, 3, 9, 16, 0))
+        self.assertEqual(params[6], datetime(2024, 3, 10, 0, 0))
 
     def test_process_entry_commits_on_success(self):
         db = mock.Mock()
         cursor = mock.Mock()
+        config = collector.CollectorConfig(
+            log_file=collector.Path("/tmp/unbound.log"),
+            db_host="localhost",
+            db_user="admin",
+            db_password="secret",
+            db_name="dns",
+            db_port=3306,
+            db_timezone="Asia/Manila",
+            poll_interval=0.2,
+            start_from_end=True,
+            verbosity=1,
+        )
         entry = collector.ParsedLogEntry(
             client_ip="192.168.1.20",
             domain="example.com",
@@ -115,7 +137,7 @@ class PersistenceTests(unittest.TestCase):
             timestamp=datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
         )
 
-        collector.process_entry(db, cursor, entry)
+        collector.process_entry(db, cursor, entry, config)
 
         self.assertEqual(cursor.execute.call_count, 2)
         db.commit.assert_called_once()
@@ -146,6 +168,7 @@ class DaemonBehaviorTests(unittest.TestCase):
             db_password="secret",
             db_name="dns",
             db_port=3306,
+            db_timezone="system",
             poll_interval=0.2,
             start_from_end=True,
             verbosity=2,
@@ -170,6 +193,7 @@ class DaemonBehaviorTests(unittest.TestCase):
             db_password="secret",
             db_name="dns",
             db_port=3306,
+            db_timezone="system",
             poll_interval=0.2,
             start_from_end=True,
             verbosity=1,
