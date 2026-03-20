@@ -43,6 +43,36 @@ class ParseLogLineTests(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertEqual(entry.client_ip, "2001:db8::1")
 
+    def test_parse_blacklist_log_line(self):
+        line = (
+            "[1773941311] unbound[215771:0] info: "
+            "zqtk.net. always_nxdomain category=adware "
+            "127.0.0.1@36940 zqtk.net. A IN"
+        )
+
+        entry = collector.parse_blacklist_log_line(line)
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.client_ip, "127.0.0.1")
+        self.assertEqual(entry.domain, "zqtk.net.")
+        self.assertEqual(entry.qtype, "A")
+        self.assertEqual(entry.category, "adware")
+        self.assertEqual(
+            entry.timestamp,
+            datetime.fromtimestamp(1773941311, tz=timezone.utc),
+        )
+
+    def test_parse_event_returns_blacklist_entry(self):
+        line = (
+            "[1773941311] unbound[215771:0] info: "
+            "zqtk.net. always_nxdomain category=adware "
+            "127.0.0.1@36940 zqtk.net. A IN"
+        )
+
+        entry = collector.parse_event(line)
+
+        self.assertIsInstance(entry, collector.ParsedBlacklistEntry)
+
     def test_unmatched_line_returns_none(self):
         self.assertIsNone(collector.parse_log_line("not an unbound log line"))
 
@@ -112,6 +142,26 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(params[5], "query")
         self.assertEqual(params[6], datetime(2024, 3, 10, 0, 0))
 
+    def test_insert_blacklist_log(self):
+        cursor = mock.Mock()
+        entry = collector.ParsedBlacklistEntry(
+            client_ip="127.0.0.1",
+            domain="zqtk.net.",
+            qtype="A",
+            category="adware",
+            timestamp=datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
+        )
+
+        collector.insert_blacklist_log(cursor, entry, "Asia/Manila")
+
+        execute_args = cursor.execute.call_args.args
+        params = execute_args[1]
+        self.assertEqual(params[0], datetime(2024, 3, 10, 0, 0))
+        self.assertEqual(params[1], "127.0.0.1")
+        self.assertEqual(params[2], "zqtk.net.")
+        self.assertEqual(params[3], "A")
+        self.assertEqual(params[4], "adware")
+
     def test_process_entry_commits_on_success(self):
         db = mock.Mock()
         cursor = mock.Mock()
@@ -134,6 +184,34 @@ class PersistenceTests(unittest.TestCase):
             qclass="IN",
             rcode="NOERROR",
             latency_ms=12.0,
+            timestamp=datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
+        )
+
+        collector.process_entry(db, cursor, entry, config)
+
+        self.assertEqual(cursor.execute.call_count, 2)
+        db.commit.assert_called_once()
+
+    def test_process_blacklist_entry_commits_on_success(self):
+        db = mock.Mock()
+        cursor = mock.Mock()
+        config = collector.CollectorConfig(
+            log_file=collector.Path("/tmp/unbound.log"),
+            db_host="localhost",
+            db_user="admin",
+            db_password="secret",
+            db_name="dns",
+            db_port=3306,
+            db_timezone="Asia/Manila",
+            poll_interval=0.2,
+            start_from_end=True,
+            verbosity=1,
+        )
+        entry = collector.ParsedBlacklistEntry(
+            client_ip="127.0.0.1",
+            domain="zqtk.net.",
+            qtype="A",
+            category="adware",
             timestamp=datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc),
         )
 

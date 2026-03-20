@@ -21,3 +21,17 @@ CREATE TABLE IF NOT EXISTS dns_logs (
     KEY idx_dns_logs_client_ip (client_ip),
     KEY idx_dns_logs_status (status)
 );
+
+CREATE TABLE IF NOT EXISTS dns_blacklist (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    timestamp DATETIME NOT NULL,
+    client_ip VARCHAR(45) NOT NULL,
+    domain VARCHAR(255) NOT NULL,
+    qtype VARCHAR(32) NOT NULL,
+    category VARCHAR(64) NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_dns_blacklist_timestamp (timestamp),
+    KEY idx_dns_blacklist_client_ip (client_ip),
+    KEY idx_dns_blacklist_domain (domain),
+    KEY idx_dns_blacklist_category (category)
+);

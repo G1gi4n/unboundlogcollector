@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
-from typing import Optional
+from typing import Optional, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
@@ -25,6 +25,17 @@ LOG_PATTERN = re.compile(
     r"(?P<qclass>\S+)"
     r"(?:\s+(?P<rcode>\S+))?"
     r"(?:\s+(?P<latency>\d+(?:\.\d+)?))?"
+)
+BLACKLIST_LOG_PATTERN = re.compile(
+    r"\[(?P<unix_ts>\d+)\]\s+"
+    r"unbound\[\d+:\d+\]\s+info:\s+"
+    r"(?P<matched_domain>\S+)\s+"
+    r"(?P<policy>\S+)\s+"
+    r"category=(?P<category>\S+)\s+"
+    r"(?P<client>[0-9A-Fa-f:.]+)@\d+\s+"
+    r"(?P<domain>\S+)\s+"
+    r"(?P<qtype>\S+)\s+"
+    r"(?P<qclass>\S+)"
 )
 LOGGER = logging.getLogger("unboundlogcollector")
 
@@ -62,6 +73,18 @@ class ParsedLogEntry:
     rcode: Optional[str]
     latency_ms: Optional[float]
     timestamp: datetime
+
+
+@dataclass(frozen=True)
+class ParsedBlacklistEntry:
+    client_ip: str
+    domain: str
+    qtype: str
+    category: str
+    timestamp: datetime
+
+
+ParsedEntry = Union[ParsedLogEntry, ParsedBlacklistEntry]
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -105,6 +128,30 @@ def parse_log_line(line: str) -> Optional[ParsedLogEntry]:
     )
 
 
+def parse_blacklist_log_line(line: str) -> Optional[ParsedBlacklistEntry]:
+    match = BLACKLIST_LOG_PATTERN.search(line)
+    if not match:
+        return None
+
+    data = match.groupdict()
+
+    return ParsedBlacklistEntry(
+        client_ip=data["client"],
+        domain=data["domain"],
+        qtype=data["qtype"],
+        category=data["category"],
+        timestamp=datetime.fromtimestamp(int(data["unix_ts"]), tz=timezone.utc),
+    )
+
+
+def parse_event(line: str) -> Optional[ParsedEntry]:
+    blacklist_entry = parse_blacklist_log_line(line)
+    if blacklist_entry is not None:
+        return blacklist_entry
+
+    return parse_log_line(line)
+
+
 def resolve_database_timezone(name: str):
     normalized_name = name.strip()
     lowered_name = normalized_name.lower()
@@ -143,6 +190,27 @@ def insert_log(cursor, entry: ParsedLogEntry, db_timezone_name: str) -> None:
             entry.latency_ms,
             status,
             db_timestamp,
+        ),
+    )
+
+
+def insert_blacklist_log(
+    cursor,
+    entry: ParsedBlacklistEntry,
+    db_timezone_name: str,
+) -> None:
+    db_timestamp = to_database_timestamp(entry.timestamp, db_timezone_name)
+    cursor.execute(
+        """
+        INSERT INTO dns_blacklist (timestamp, client_ip, domain, qtype, category)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            db_timestamp,
+            entry.client_ip,
+            entry.domain,
+            entry.qtype,
+            entry.category,
         ),
     )
 
@@ -220,9 +288,12 @@ def follow_log(
         handle.close()
 
 
-def process_entry(db, cursor, entry: ParsedLogEntry, config: CollectorConfig) -> None:
+def process_entry(db, cursor, entry: ParsedEntry, config: CollectorConfig) -> None:
     insert_client_ip(cursor, entry.client_ip)
-    insert_log(cursor, entry, config.db_timezone)
+    if isinstance(entry, ParsedBlacklistEntry):
+        insert_blacklist_log(cursor, entry, config.db_timezone)
+    else:
+        insert_log(cursor, entry, config.db_timezone)
     db.commit()
 
 
@@ -242,7 +313,7 @@ def run_collector(config: CollectorConfig, stop_event: Event) -> None:
             stop_event=stop_event,
             start_from_end=config.start_from_end,
         ):
-            entry = parse_log_line(line)
+            entry = parse_event(line)
             if entry is None:
                 continue
 

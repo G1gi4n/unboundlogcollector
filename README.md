@@ -6,8 +6,10 @@ Small Python service that tails an Unbound log and writes parsed DNS activity in
 
 - Follows the Unbound log file continuously.
 - Parses query and response lines, including IPv6 clients.
+- Parses blacklist lines such as `always_nxdomain category=...`.
 - Inserts new client IPs into `accounts_clientip`.
 - Inserts DNS activity into `dns_logs`.
+- Inserts blacklist hits into `dns_blacklist`.
 - Reopens the log automatically after rotation or truncation.
 
 ## Requirements
@@ -56,6 +58,12 @@ The repository now includes a starter schema in [schema.sql](/Users/giancarlogui
 
 ```bash
 mysql -u root -p dns < schema.sql
+```
+
+Blacklist lines with this format are now stored in `dns_blacklist`:
+
+```text
+[1773941311] unbound[215771:0] info: zqtk.net. always_nxdomain category=adware 127.0.0.1@36940 zqtk.net. A IN
 ```
 
 ## Running
